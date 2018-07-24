@@ -136,7 +136,6 @@ Resources:
             InstanceType: t2.micro
             Monitoring: 'false'
             KeyName: Rede-EC2-KP
-            IamInstanceProfile: ecsbecados 
             NetworkInterfaces: 
               - AssociatePublicIpAddress: "true"
                 GroupSet: 
@@ -157,7 +156,7 @@ Resources:
                   sudo yum -y update
                   sudo yum -y upgrade
 
-                  #Configuration of PHP on NGINEX
+                  #Configuration of PHP on NGINX
                   echo  "location ~ \.php$ {
                           root /usr/share/nginx/html;
                           fastcgi_pass   unix:/var/run/php-fpm/php-fpm.sock;
