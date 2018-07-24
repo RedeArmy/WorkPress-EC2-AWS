@@ -1,0 +1,11 @@
+#Configure Secure your database:
+
+sudo mysql_secure_installation
+
+Enter current password for root: Press return for none
+Change Root Password: Y
+New Password: Enter your new password
+Remove anonymous user: Y
+Disallow root login remotely: Y
+Remove test database and access to it: Y
+Reload privilege tables now: Y
