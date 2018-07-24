@@ -1,0 +1,209 @@
+Description: This template deploys a VPC, with 1 public subnet and 1 EC2 with a WordPress Installation 
+AWSTemplateFormatVersion: '2010-09-09'
+
+#----------------------------------------------------------Parameters-----------------------------------------------------------------------------------
+Parameters:
+
+    EnvName:
+        Description: An environment name that will be prefixed to resource names
+        Type: String
+    
+    WordPressName:
+        Description: Environment that will be the name of the WordPress Folder and WordPress DB name
+        Type: String
+    
+    WordPressPass:
+        NoEcho: 'true'
+        Description: Environment that will be the password of the WordPress DB. (Min 8 alphanumeric characters) 
+        Type: String
+        MinLength: '8'
+        AllowedPattern: "[a-zA-Z0-9!?]*"
+        ConstraintDescription: Must only contain upper and lowercase letters and numbers
+        
+#----------------------------------------------------------Resources-----------------------------------------------------------------------------------
+Resources:
+
+    RedeVPC: 
+        Type: AWS::EC2::VPC
+        Properties:
+            CidrBlock: 10.0.0.0/16
+            EnableDnsHostnames: true
+            Tags: 
+                - Key: Name 
+                  Value: !Ref EnvName
+            
+    InternetGateway:
+        Type: AWS::EC2::InternetGateway
+        Properties:
+            Tags:
+                - Key: Name
+                  Value: !Ref EnvName
+            
+    InternetGatewayAttachment:
+        Type: AWS::EC2::VPCGatewayAttachment
+        Properties:
+            InternetGatewayId: !Ref InternetGateway
+            VpcId: !Ref RedeVPC
+
+    RedeNAClAZ:
+        Type: AWS::EC2::NetworkAcl
+        Properties:
+            VpcId: !Ref RedeVPC
+
+    RedeInboundRuleAZ:
+        Type: AWS::EC2::NetworkAclEntry
+        Properties:
+            NetworkAclId: !Ref RedeNAClAZ
+            RuleNumber: '100'
+            Protocol: -1
+            RuleAction: allow
+            CidrBlock: 0.0.0.0/0
+            Egress: "true"
+
+    RedeOutboundRuleAZ:
+        Type: AWS::EC2::NetworkAclEntry
+        Properties:
+            NetworkAclId: !Ref RedeNAClAZ
+            RuleNumber: '100'
+            Protocol: -1
+            RuleAction: allow
+            CidrBlock: 0.0.0.0/0
+            Egress: "false"
+
+    PublicSubnet: 
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !Ref RedeVPC
+            AvailabilityZone: us-east-1a
+            CidrBlock: 10.0.11.0/20
+            MapPublicIpOnLaunch: true
+            Tags: 
+                - Key: Name 
+                  Value: !Sub ${EnvName} Public Subnet 1
+
+    NatGatewayEIP:
+        Type: AWS::EC2::EIP
+        DependsOn: InternetGatewayAttachment
+        Properties: 
+            Domain: vpc
+
+    NatGateway: 
+        Type: AWS::EC2::NatGateway
+        Properties: 
+            AllocationId: !GetAtt NatGatewayEIP.AllocationId
+            SubnetId: !Ref PublicSubnet
+
+    PublicRouteTable:
+        Type: AWS::EC2::RouteTable
+        Properties: 
+            VpcId: !Ref RedeVPC
+            Tags: 
+                - Key: Name 
+                  Value: !Sub ${EnvName} Public Routes
+
+    DefaultPublicRoute: 
+        Type: AWS::EC2::Route
+        DependsOn: InternetGatewayAttachment
+        Properties: 
+            RouteTableId: !Ref PublicRouteTable
+            DestinationCidrBlock: 0.0.0.0/0
+            GatewayId: !Ref InternetGateway
+
+    PublicSubnetRouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            RouteTableId: !Ref PublicRouteTable
+            SubnetId: !Ref PublicSubnet
+    
+    RedeSG:
+        Type: "AWS::EC2::SecurityGroup"
+        Properties:
+            GroupName: RedeSG
+            GroupDescription: Permite el acceso de los http y SSH a traves del puerto 80/22/443
+            VpcId: !Ref RedeVPC
+            SecurityGroupIngress:
+              - CidrIp: 0.0.0.0/0
+                IpProtocol: -1
+            SecurityGroupEgress:
+              - CidrIp: 0.0.0.0/0
+                IpProtocol: -1
+    
+    RedeEC2Wordpress:
+        Type: "AWS::EC2::Instance"
+        Properties:
+            AvailabilityZone: us-east-1a
+            ImageId: ami-cfe4b2b0
+            InstanceType: t2.micro
+            Monitoring: 'false'
+            KeyName: Rede-EC2-KP
+            IamInstanceProfile: ecsbecados 
+            NetworkInterfaces: 
+              - AssociatePublicIpAddress: "true"
+                GroupSet: 
+                - !Ref RedeSG
+                SubnetId: !Ref PublicSubnet
+                DeviceIndex: 0
+            UserData: 
+              Fn::Base64: !Sub |
+                  #!/bin/bash
+
+                  #Installation of packages
+                  sudo yum -y install nginx
+                  sudo yum install php70 -y
+                  sudo yum install php70-fpm -y
+                  sudo yum install php70-mysqlnd -y
+                  sudo yum install -y mysql-server
+                  sudo yum install -y mysql
+                  sudo yum -y update
+                  sudo yum -y upgrade
+
+                  #Configuration of PHP on NGINEX
+                  echo  "location ~ \.php$ {
+                          root /usr/share/nginx/html;
+                          fastcgi_pass   unix:/var/run/php-fpm/php-fpm.sock;
+                          fastcgi_index  index.php;
+                          fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+                          include        fastcgi_params; 
+                        }" > /etc/nginx/default.d/nginx-php.conf
+
+                  sudo perl -pi -e "s[listen = 127.0.0.1:9000][listen = \/var\/run/php-fpm\/php-fpm.sock]g" /etc/php-fpm.d/www.conf
+                  sudo perl -pi -e "s[;listen.owner = nobody][listen.owner = nginx]g" /etc/php-fpm.d/www.conf
+                  sudo perl -pi -e "s[;listen.group = nobody][listen.group = nginx]g" /etc/php-fpm.d/www.conf
+                  sudo perl -pi -e "s[;listen.mode = 0660][listen.mode = 0664]g" /etc/php-fpm.d/www.conf
+                  sudo perl -pi -e "s[user = apache][user = nginx]g" /etc/php-fpm.d/www.conf
+                  sudo perl -pi -e "s[group = apache][group = nginx]g" /etc/php-fpm.d/www.conf
+
+                  #Creation of PHP info file to test PHP installation
+                  echo "<?php
+                        phpinfo();" > /usr/share/nginx/html/info.php
+
+                  #Start all services 
+                  sudo service nginx start
+                  sudo service php-fpm start
+                  sudo service mysqld start
+                  mysqladmin -uroot create ${WordPressName} #<---------Create MYSQL local DB with root user 
+
+                  #Creation of executable file for installation and configuration of WordPress
+                  echo "cd /usr/share/nginx/html
+                        wget http://wordpress.org/latest.tar.gz
+                        sudo tar -xzvf latest.tar.gz
+                        sudo mv wordpress ${WordPressName}
+                        cd /usr/share/nginx/html/${WordPressName}
+                        sudo mv wp-config-sample.php wp-config.php" > /home/ec2-user/installW.sh
+                  sudo chmod +x /home/ec2-user/installW.sh
+                  sudo /home/ec2-user/installW.sh
+
+                  #Modify the database connection parameters
+                  sudo perl -pi -e "s[database_name_here][${WordPressName}]g" /usr/share/nginx/html/${WordPressName}/wp-config.php
+                  sudo perl -pi -e "s[username_here][root]g" /usr/share/nginx/html/${WordPressName}/wp-config.php
+                  sudo perl -pi -e "s[password_here][${WordPressPass}]g" /usr/share/nginx/html/${WordPressName}/wp-config.php
+            Tags: 
+                - Key: Name 
+                  Value: !Sub ${EnvName}-Practicas
+
+#----------------------------------------------------------Outputs-----------------------------------------------------------------------------------
+Outputs:
+
+    URLEC2Wordpress: 
+        Description: A reference to the URL of the WordPress Index Page
+        Value: !Join [ "", [ !GetAtt [RedeEC2Wordpress, PublicDnsName], / ,!Ref WordPressName] ]
